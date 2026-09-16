@@ -1244,6 +1244,7 @@
       DOUBLE PRECISION  DNRM2
       EXTERNAL          DNRM2
 *     .. Intrinsic Functions ..
+      INTRINSIC         CEILING, HUGE, NEAREST
       INTRINSIC         ABS, DBLE, MAX, MIN, SQRT
 *     .. Model parameters ..
       DOUBLE PRECISION  BIGNUM, SAFMAX, SAFMIN, SMLNUM, ULP
@@ -1256,7 +1257,8 @@
       DOUBLE PRECISION  ROGUE, SNRM, TRAT, V0, V1, WORKSSQ, Y1, Y2,
      &                  YMAX, YMIN, YNRM, ZNRM
       INTEGER           I, IV, IW, IX
-      LOGICAL           FIRST
+      LOGICAL           FIRST, REGRESS
+      DOUBLE PRECISION  ERR, ETA, UNFL
 *     .. Local Arrays ..
       DOUBLE PRECISION  VALUES(NV), WORK(NMAX), X(NMAX), Z(NMAX)
 *     .. Scalars in Common ..
@@ -1276,6 +1278,7 @@
       VALUES(10) = DXVALS(V0,3)
       ROGUE = -1234.5678D+0
       FIRST = .TRUE.
+      REGRESS = .FALSE.
 *
 *     Check that the arrays are large enough
 *
@@ -1289,6 +1292,15 @@
          RETURN
       END IF
 *
+*     Underflow contributes at most ETA/2 per input component,
+*     hence SQRT(dim)*ETA/2 to its norm. Allow another 2*ETA for
+*     rounding in the reference and computed norm.
+*     For INCX=0 the reference uses the stored input directly.
+*
+      ETA = NEAREST(ZERO,ONE)
+      UNFL = DBLE(CEILING(TWO+HALF*SQRT(DBLE(N))))*ETA
+      IF (INCX.EQ.0) UNFL = ETA
+*
 *     Generate (N-1) values in (-1,1).
 *
       DO I = 2, N
@@ -1299,6 +1311,7 @@
 *     Compute the sum of squares of the random values
 *     by an unscaled algorithm.
 *
+   10 CONTINUE
       WORKSSQ = ZERO
       DO I = 2, N
          WORKSSQ = WORKSSQ + WORK(I)*WORK(I)
@@ -1384,10 +1397,19 @@
                END IF
             ELSE IF (SNRM == ZNRM) THEN
                TRAT = ZERO
-            ELSE IF (ZNRM == ZERO) THEN
-               TRAT = SNRM / ULP
+            ELSE IF (SNRM.LT.ZERO.OR.
+     +               ABS(SNRM).GT.HUGE(ONE).OR.
+     +               ABS(ZNRM).GT.HUGE(ONE)) THEN
+               TRAT = ONE / ULP
             ELSE
-               TRAT = (ABS(SNRM-ZNRM) / ZNRM) / (DBLE(N)*ULP)
+               ERR = MAX(ZERO,ABS(SNRM-ZNRM)-UNFL)
+               IF (ERR == ZERO) THEN
+                  TRAT = ZERO
+               ELSE IF (ZNRM == ZERO) THEN
+                  TRAT = ONE / ULP
+               ELSE
+                  TRAT = (ERR / ZNRM) / (DBLE(N)*ULP)
+               END IF
             END IF
             NTESTS = NTESTS + 1
             IF ((TRAT.NE.TRAT).OR.(TRAT.GE.THRESH)) THEN
@@ -1397,9 +1419,18 @@
                   WRITE(NOUT,99999)
                END IF
                WRITE (NOUT,98) "DNRM2", N, INCX, IV, IW, TRAT
+               WRITE (NOUT,*) ' X = ',
+     +            (X(1+(I-1)*ABS(INCX)),I=1,N)
             END IF
          END DO
       END DO
+*     Repeat the N=3, INCX=0 case with a fixed subnormal tail.
+*     The old relative-only comparison rejects this rounded norm.
+      IF (N.EQ.3.AND.INCX.EQ.0.AND..NOT.REGRESS) THEN
+         REGRESS = .TRUE.
+         WORK(N) = HALF*50000000000076.D0*ULP
+         GO TO 10
+      END IF
 99999 FORMAT ('                                       FAIL')
    99 FORMAT ( ' Not enough space to test ', A6, ': NMAX = ',I6,
      + ', INCX = ',I6,/,'   N = ',I6,', must be at least ',I6 )
